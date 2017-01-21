@@ -76,5 +76,7 @@ The `sched_exec` function is used to determine the least loaded processor that c
 
 # Links
 [How does the Linux kernel run a program](https://0xax.gitbooks.io/linux-insides/content/SysCall/syscall-4.html) by 0xax
+
 [Anatomy of a Progmam in Memory](http://duartes.org/gustavo/blog/post/anatomy-of-a-program-in-memory/) by Gustavo Duarte
+
 [Anatomy of Linux process management](http://www.osnews.com/story/9691/Anatomy_of_the_Linux_boot_process) by IBM Developer Works
