@@ -119,6 +119,19 @@ The `sched_exec` function is used to determine the least loaded processor that c
    * Address of the entry point of the new task;
    * Address of the top of the stack for the new task.
 
+- `start_thread` calls `start_thread_common` which fills:
+    - `fs` segment register with zero
+    - `es` and ds with the value of the data segment register
+    - sets new values to the `instruction pointer`, `cs` segments etc
+    - Call `force_iret` macro that force a system call return via iret instruction
+
+With the creation of a new thread to be run in userspace, now we can return from `exec_binprm` and we're in `do_execveat_common` again. After the `exec_binprm` finishes its execution, memory for structures that were allocated before were released and returns.
+
+After we returned from the execve system call handler, execution of our program will be started. We can do it, because **all context related information already configured for this purpose. As we saw the `execve` system call does not return control to a process, but code, data and other segments of the caller process are just overwritten of the program segments.** Remember, this is a forked process from bash. Basically, this is the whole fork()/execv() overview.
+
+The exit from our application will be implemented through the exit system call.
+
+
 # Links
 [How does the Linux kernel run a program](https://0xax.gitbooks.io/linux-insides/content/SysCall/syscall-4.html) by 0xax
 
