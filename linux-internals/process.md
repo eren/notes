@@ -59,17 +59,20 @@ do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
 - Search and open executable file on the disk (as a side node, this part involves VFS, path finding, inodes, etc).
 - Check the binary is not from `noexec` mountpoint. Avoid executing a binary from filesystems that do not contain executable binaries like proc or sysfs
 - Initialize file structure and return pointer on this structure.
-- Run `sched_exec()`
 
+## Back to do_execveat_common
 ```c
+# ...
+# ...
 file = do_open_execat(fd, filename, flags);
 retval = PTR_ERR(file);
 if (IS_ERR(file))
     goto out_unmark;
 
 sched_exec();
+# ...
+# ...
 ```
-
 The `sched_exec` function is used to determine the least loaded processor that can execute the new program and to migrate the current process to it.
 
 - Check the file descriptor of given binary
@@ -108,7 +111,7 @@ The `sched_exec` function is used to determine the least loaded processor that c
 
 - `binfmt_elf` checks the ELF magic number. Remember this information is available already in `bprm` structure as `128` bytes were read beforehand.
 
-## ELF Loading
+## ELF Loading and Starting Thread
 - `load_elf_binary` checks the architecture and type of the executable file
 - Load program header table
 - Read program interpreter (`.interp` section) and libraries linked with the executable file from the disk and load them into memory
