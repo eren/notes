@@ -10,8 +10,8 @@ Mainly, the most important part while running a program is this workflow:
 execute_command
 --> execute_command_internal
 ----> execute_simple_command
-------> execute_disk_command
---------> shell_execve
+------> execute_disk_command - calls make_child() and in turn calls fork()
+--------> shell_execve - this is called in the child.
 ```
 
 `shell_execve` calls `execve` system call which has the following signature: 
@@ -43,10 +43,9 @@ do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
 - Check running process limit. If limit exceeds, return with error. If not, clear `PF_NPROC_EXCEEDED` bit.
 - Unshare files of the current task to eliminate potential leak of the execve'd binary's file descriptor.
 - Begin to create `bprm` structure which holds the arguments that are used when loading binaries such as:
+    - `vma` field which represents single memory area over a contiguous interval in a given address space where the application will be loaded 
 
-   `vma` field which represents single memory area over a contiguous interval in a given address space where the application will be loaded 
-
-   `mm` field which is a memory descriptor of the binary, pointer to the top of memory and many other different fields respectively.
+    - `mm` field which is a memory descriptor of the binary, pointer to the top of memory and many other different fields respectively.
 
 - Create `bprm` credentials using `prepare_bprm_creds` function.
 
@@ -73,6 +72,52 @@ sched_exec();
 
 The `sched_exec` function is used to determine the least loaded processor that can execute the new program and to migrate the current process to it.
 
+- Check the file descriptor of given binary
+    - Does it start with / ?
+    - Does it contain `AT_FDCWD` (which we passed earlier) describing given executable binary is interpreted relative to the current working directory of the calling process.
+
+- Set `bprm->interp` with the same filename. This is updated later with the real program interpreter. This depends on the binary format of the program.
+
+- Call `bprm_mm_init` which initializes `mm_struct` structure representing address space of a process (memory management is a lengthy topic in linux so let's leave it there).
+
+- Calculate the count of command line arguments, count of environment variables and set it to `bprm->argc` and `bprm->envc` respectively checking `MAX_ARGS_STRINGS`.
+
+- Call `prepare_binprm` which fills `uid` from inode and reads `128` bytes from the executable file to check the type of the executable program. The rest of the program is read later.
+
+- Copy the filename of the executable binary file, command line arguments and environment variables to the `linux_bprm` with the call of the `copy_strings_kerne`l function.
+
+- Set the pointer to the top of new program's stack that we set in the `bprm_mm_init` function:
+
+    ```
+    bprm->exec = bprm->p;
+    ```
+- Call `exec_bprm`
+
+## Executing The Program (exec_bprm)
+- Store the `pid` and the `pid` seen from the namespace of the current task.
+- Call `search_binary_handler`. There are different binary handles in the linux kernel:
+   * `binfmt_script` - support for interpreted scripts that are starts from the [#!](https://en.wikipedia.org/wiki/Shebang_%28Unix%29) line;
+   * `binfmt_misc` - support different binary formats, according to runtime configuration of the Linux kernel;
+   * `binfmt_elf` - support [elf](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) format;
+   * `binfmt_aout` - support [a.out](https://en.wikipedia.org/wiki/A.out) format;
+   * `binfmt_flat` - support for [flat](https://en.wikipedia.org/wiki/Binary_file#Structure) format;
+   * `binfmt_elf_fdpic` - Support for [elf](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) [FDPIC](http://elinux.org/UClinux_Shared_Library#FDPIC_ELF) binaries;
+   * `binfmt_em86` - support for Intel [elf](https://en.wikipedia.org/wiki/Executable_and_Linkable_Format) binaries running on [Alpha](https://en.wikipedia.org/wiki/DEC_Alpha) machines.
+
+- `search_binary_handler` tries each of the handlers with `load_binary` call and passes `bprm` structure. If given handler supports the program, it starts to prepare the executable binary for execution. In our case, we will look at ELF.
+
+- `binfmt_elf` checks the ELF magic number. Remember this information is available already in `bprm` structure as `128` bytes were read beforehand.
+
+## ELF Loading
+- `load_elf_binary` checks the architecture and type of the executable file
+- Load program header table
+- Read program interpreter (`.interp` section) and libraries linked with the executable file from the disk and load them into memory
+- Setup the stack for the program and map into a correct location
+- Map `.bss` and `brk` section and do many other things.
+- At the end, call `start_thread` and pass 3 arguments.
+   * Set of [registers](https://en.wikipedia.org/wiki/Processor_register) for the new task;
+   * Address of the entry point of the new task;
+   * Address of the top of the stack for the new task.
 
 # Links
 [How does the Linux kernel run a program](https://0xax.gitbooks.io/linux-insides/content/SysCall/syscall-4.html) by 0xax
