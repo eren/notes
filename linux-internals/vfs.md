@@ -292,6 +292,46 @@ struct inode_operations {
 };
 ```
 
+# Dentry
+In the path `/bin/vi`, both `bin` and `vi` are files `bin` being the special directory file and `vi` being a regular file. An inode object represents both these components.
+
+A dentry is a specific component in a path. Using the previous example, `/`, `bin`, and `vi` are all dentry objects. The first two are directories and the last is a regular file. This is an important point: **dentry objects are all components in a path, including files**. Resolving a path and walking its components is a nontrivial exercise, time-consuming and rife with string comparisons. The dentry object makes the whole process easier.
+
+The dentry object **does not** correspond to any sort of on-disk data structure. The VFS creates it **on the fly from a string representation of a path name**.
+
+## Path Finding
+
+
+ 
+```c
+struct dentry {
+        atomic_t                 d_count;      /* usage count */
+        unsigned long            d_vfs_flags;  /* dentry cache flags */
+        spinlock_t               d_lock;       /* per-dentry lock */
+        struct inode             *d_inode;     /* associated inode */
+        struct list_head         d_lru;        /* unused list */
+        struct list_head         d_child;      /* list of dentries within */
+        struct list_head         d_subdirs;    /* subdirectories */
+        struct list_head         d_alias;      /* list of alias inodes */
+        unsigned long            d_time;       /* revalidate time */
+        struct dentry_operations *d_op;        /* dentry operations table */
+        struct super_block       *d_sb;        /* superblock of file */
+        unsigned int             d_flags;      /* dentry flags */
+        int                      d_mounted;    /* is this a mount point? */
+        void                     *d_fsdata;    /* filesystem-specific data */
+        struct rcu_head          d_rcu;        /* RCU locking */
+        struct dcookie_struct    *d_cookie;    /* cookie */
+        struct dentry            *d_parent;    /* dentry object of parent */
+        struct qstr              d_name;       /* dentry name */
+        struct hlist_node        d_hash;       /* list of hash table entries */
+        struct hlist_head        *d_bucket;    /* hash bucket */
+        unsigned char            d_iname[DNAME_INLINE_LEN_MIN]; /* short name */
+};
+```
+
+
+
+
 
 # Links
 [Linux Kernel Development](http://www.makelinux.net/books/lkd2)
