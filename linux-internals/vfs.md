@@ -299,10 +299,6 @@ A dentry is a specific component in a path. Using the previous example, `/`, `bi
 
 The dentry object **does not** correspond to any sort of on-disk data structure. The VFS creates it **on the fly from a string representation of a path name**.
 
-## Path Finding
-
-
- 
 ```c
 struct dentry {
         atomic_t                 d_count;      /* usage count */
@@ -330,8 +326,13 @@ struct dentry {
 ```
 
 
+# Hard vs Soft Links
 
+![](https://i.stack.imgur.com/ka2ab.jpg)
 
+Note that the mapping from `dentries` to `inodes` given by `d_inode` is in general a many-to-one mapping; a single file may be pointed to by multiple paths in the same filesystem (called "hard links"), in which case it will not be deleted as long as any such path exists.
+
+`ln -s` creates a soft link, to a file name. `ln foo bar` will create a hard link. If the file is deleted, the hard link will contain the data because it points to the inode.
 
 # Links
 [Linux Kernel Development](http://www.makelinux.net/books/lkd2)
