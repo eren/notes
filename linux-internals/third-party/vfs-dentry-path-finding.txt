@@ -1,0 +1,201 @@
+Source: http://www.fieldses.org/~bfields/kernel/vfs.txt
+-------------------------------------------------------
+
+A filesystem is represented in memory using dentries and inodes.  Inodes are
+the objects that represent the underlying files (and also directories).  A
+dentry is an object with a string name (d_name), a pointer to an inode
+(d_inode), and a pointer to the parent dentry (d_parent).
+
+So a tree such as
+
+	/
+	|
+	foo
+	|   \
+	bar  bar2
+
+is represented by four inodes: one each for foo, bar, and bar2, and the root;
+and three dentries: one linking bar to foo, one linking bar2 to foo, and one
+linking foo to the root.  The first of those dentries, for example, has a name
+of "bar", a d_inode pointing to the underlying file bar, and a d_parent
+pointing to the dentry for foo (which in turn would have a d_parent pointing to
+the dentry for the root).  The root dentry has a d_parent that points to
+itself.
+
+Note that the mapping from dentries to inodes given by d_inode is in general a
+many-to-one mapping; a single file may be pointed to by multiple paths in the
+same filesystem (called "hard links"), in which case it will not be deleted
+as long as any such path exists.
+
+Files and directories may also be opened by processes, of course, and a struct
+file is used to represent this.  The struct file contains a pointer to the
+dentry.  The underlying file will also not be deleted as long as there are
+processes holding the file open, even though that file may no longer be
+accessible by any path in the filesystem.
+
+Inodes in addition have i_sb pointers that point to the superblock, a structure
+representing the underlying filesystem (usually representing either the
+physical filesystem stored on a local partition, or a filesystem on a remote
+system, in the case of NFS).
+
+The namespace that a process sees, however, is normally made up of more than
+just one filesystem; instead it is patched together from multiple filesystems
+that are mounted on top of each other.  The structure of mountpoints is
+represented by a tree of vfsmount structures, one for each mountpoint.
+
+In addition to links to parent and child vfsmounts, each vfsmount contains:
+	mnt_root: a pointer to the dentry that is the *root* of the vfsmount.
+	mnt_mountpoint: a pointer to the dentry that this vfsmount is
+		mounted on.
+
+The relationship between vfsmounts and underlying filesystems is also
+many-to-one; using mount --bind one can mount the same filesystem in multiple
+places, resulting in multiple vfsmounts that share the same dentries, inodes,
+and superblock.
+
+In addition, it is possible for different processes to see entirely different
+namespaces; if we create a new task by calling clone (see the clone(2) man
+page) with the CLONE_NEWNS flag, then that process will be given its own copy
+of its parent's tree of vfsmounts.  The root of the namespace is the vfsmount
+pointed to by task->namespace->root.  (Though task->fs->root task->fs->rootmnt
+is where lookups actually start, and may point somewhere different from
+task->namespace->root if we've done a chroot.)
+
+So, to look up an absolute path (e.g., "/foo/bar"), what we do is:
+	1. Start at the task->fs->rootmnt vfsmount, and the dentry
+	   task->fs->root.
+	2. Look for a dentry "foo" whose d_parent is this dentry
+	   and whose name is "foo".
+	3. Check to see if there's something mounted on the dentry we just
+	   found; if so, look up whatever's mounted there and replace the
+	   current vfsmount by that vfsmount and the new dentry by its root
+	   dentry.
+	4. Repeat step 2 for "bar" and the resulting vfsmount and dentry.
+
+Step 3 is the complicated bit.  The dentry we found at step 2 could actually be
+referenced from multiple places in multiple different namespaces.  In each of
+those places, it could have different filesystems mounted on it (or could have
+nothing mounted on it at all).  So there's no way to determine what is mounted
+on a dentry if all we know is the dentry; we also have to have a vfsmount.
+
+So instead what we do is look up the dentry and vfsmount in a hash table; the
+result is a vfsmount showing what (if anything) is mounted in the given dentry
+in the given vfsmount.
+
+It is also possible to mount a filesystem at a dentry and then to mount another
+filesystem on top of that mount, hiding the first filesystem.  So once we've
+found a vfsmount that is mounted at the dentry, we need to repeat the lookup
+for the new vfsmount and its root dentry to see whether something else is
+mounted there, and we repeat this process until we find a vfsmount with a root
+dentry that doesn't have anything else mounted on it.
+
+You can see this process performed by, e.g., namei.c:follow_mount().
+
+Note that at each stage of a lookup it's not just the dentry that we need, it's
+the pair of a dentry and a vfsmount.  Thus the struct nameidata, which, among
+other things, contains a dentry and vfsmount, can be used to hold the state of
+a lookup in progress.
+
+Additional notes
+^^^^^^^^^^^^^^^^
+
+Details on the task_struct, defined in include/linux/sched.h:  it contains
+struct fs_struct *fs and struct namespace *namespace fields:
+
+struct fs_struct {
+	atomic_t count;
+	rwlock_t lock;
+	int umask;
+	struct dentry * root, * pwd, * altroot;
+	struct vfsmount * rootmnt, * pwdmnt, * altrootmnt;
+};
+
+struct namespace {
+	atomic_t                count;
+	struct vfsmount *       root;
+	struct list_head        list;
+	struct rw_semaphore     sem;
+};
+
+sys_chroot() calls set_fs_root, which only changes fs->root and fs->rootmnt.
+Note that it doesn't actually change the current working directory (as
+represented by pwd and pwdmnt), so that directory, along with any files
+the task has open, are still accessible despite the chroot.
+
+The namespace-related work of sys_clone seems to be done by copy_namespace,
+which sets both the tsk->namespace and the tsk->fs stuff.
+
+Details of the vfsmount: from include/linux/mount.h:
+struct vfsmount
+{
+	struct list_head mnt_hash;
+	struct vfsmount *mnt_parent;    /* fs we are mounted on */
+	struct dentry *mnt_mountpoint;  /* dentry of mountpoint */
+	struct dentry *mnt_root;        /* root of the mounted tree */
+	struct super_block *mnt_sb;     /* pointer to superblock */
+	struct list_head mnt_mounts;    /* list of children, anchored here */
+	struct list_head mnt_child;     /* and going through their mnt_child */
+	atomic_t mnt_count;
+	int mnt_flags;
+	char *mnt_devname;              /* Name of device e.g. /dev/dsk/hda1 */
+	struct list_head mnt_list;
+};
+
+there's also mntget and mntput, which (in the case where the reference count
+goes to zero), dput's mnt_root, free_vfsmnt(mnt) (free mnt_devname, mnt),
+deactivate_super(mnt_sb) (confusing, but basically another put)
+
+Note that the dentry of the root of a filesystem has a d_parent pointer that
+just points to itself--so to traverse up you again need to know where you are
+in the vfsmount tree.
+
+sys_mount
+^^^^^^^^^
+
+First, sys_mount() itself just copies arguments from the user, then calls
+do_mount() (under BKL) to do the real work.  After some sanity checks and
+stuff, do_mount() calls path_lookup() to resolve the path.  The remaining work
+is done by either do_remount, do_loopback (the --bind case), do_move_mount, or
+do_add_mount():
+
+do_remount doesn't interest me at the moment.
+
+do_loopback (which I'm assuming for now is called with recurse == 0) calls
+path_lookup to get the path we're mount --bind'ing.  It takes a lock on
+current->namespace->sem, then calls check_mnt() on the vfsmounts on both paths,
+which checks that the target vfsmount is still attached to the current
+namespace (I assume to rule out the possibility that something's been unmounted
+since we first looked them up), then runs clone_mnt(), which returns a new
+vfsmount holding a reference to the old mount's superblock and to the dentry
+that the new vfsmount will be rooted at, and whose mnt_parent temporarily
+points to itself, and mnt_root points to the source dentry.  Then it calls
+graft_tree(), which inserts the new mount into the tree at the location given
+by "nd" as follows:
+	First, it downs nd->dentry->d_inode->i_sem, and checks that the inode
+		is still good (by checking for IS_DEADDIR());
+	Then it takes the vfsmount_lock, and makes sure the dentry is either
+		a root dentry or is hashed.
+	Then it calls attach_mnt(mnt, nd), which sets mnt's mnt_parent (taking
+		a reference), mnt_mountpoint to the dentry we're mounting on,
+		adds mnt to the mount_hashtable (hashed on the target mount
+		and dentry), and to the list of the target mount's children,
+		and finally increments the target dentry's d_mounted.
+	Finally, graft_tree() adds the new mnt to a list of all mnt's in
+		the namespace (which is used to generate /proc/mounts).
+
+lookup_mount: given a mnt and a dentry, uses the mount_hashtable to return
+something that is mounted under mnt at that dentry.
+
+follow_down: given a **mnt and **dentry, replace **mnt and **dentry by results
+of lookup_mnt (and mnt_root of that), if found; return 0 and leave unchanged
+otherwise.
+
+follow_up: goes in the other direction, replacing mount by mnt_parent and
+dentry by mnt_mountpoint.
+
+(I find the terminology a bit backwards here as I imagine mounts as being
+stacked "on top" of the underlying mountpoints.)
+
+follow_mount: same as follow_down, but continues until it gets to something
+that isn't a mountpoint.  Seems to be called at every step of a path lookup
+(see link_path_walk).
